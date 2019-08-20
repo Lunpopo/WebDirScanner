@@ -1,0 +1,3 @@
+termcolor
+pyqt5
+requests
