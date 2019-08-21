@@ -3,10 +3,11 @@ import os
 import random
 import requests
 import time
-from threading import Thread
-import queue
-
 from lib.settings import DICT_PATH, IMAGES_PATH, DATA_PATH, HEADER, DICT_LIST_TEXT
+from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import Qt, QCoreApplication, QThread, pyqtSignal
+from urllib.parse import urlparse
+from termcolor import colored
 
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QTextEdit, QDesktopWidget,
@@ -14,11 +15,6 @@ from PyQt5.QtWidgets import (
     QLabel, QLineEdit, QCheckBox, QVBoxLayout,
     QHBoxLayout, QGroupBox, QPushButton, QMessageBox
 )
-
-from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import Qt, QCoreApplication, QThread, pyqtSignal
-from urllib.parse import urlparse
-from termcolor import colored
 
 
 class MainWindow(QMainWindow):
@@ -316,11 +312,13 @@ class MainWindow(QMainWindow):
             self.pause_button.setText('Restart')
             # 让暂停属性为 True
             self.handle_scan.pause_scan = True
+            self.console_field.append('Paused')
+            QMessageBox.information(self, 'Information', '扫描暂停!', QMessageBox.Yes)
+
         elif self.pause_button.text() == 'Restart':
             self.pause_button.setText('Pause')
             self.handle_scan.pause_scan = False
             self.console_field.append('Restarting...')
-
 
     def start_scanner(self):
         """
@@ -338,25 +336,26 @@ class MainWindow(QMainWindow):
         dir_start_with = self.dir_start_field.text()
         file_extension = self.file_extension_field.text()
 
-        # 逻辑变换
-        if self.start_button.text() == 'Start':
-            self.start_button.setText('Stop')
-            self.pause_button.setEnabled(True)
-        elif self.start_button.text() == 'Stop':
-            # 停止扫描
-            self.start_button.setText('Start')
-            self.pause_button.setText('Pause')
-            self.pause_button.setEnabled(False)
 
-        # 是否是变成了Stop, 如果是 Stop, 就开始扫描
-        if self.start_button.text() == 'Stop':
-            # 首先需要target url 合法, 才进行下一步的诊断
-            if not target_url or not urlparse(target_url).netloc:
-                reply = QMessageBox.warning(self, "Warning", "Url不能为空 和 不合法值", QMessageBox.Yes)
-                self.start_button.setEnabled(True)
-                if reply == QMessageBox.Yes:
-                    self.target_url_field.setFocus()
-            else:
+        # 首先需要target url 合法, 才进行下一步的诊断
+        if not target_url or not urlparse(target_url).netloc:
+            reply = QMessageBox.warning(self, "Warning", "Url不能为空 和 不合法值", QMessageBox.Yes)
+            self.start_button.setEnabled(True)
+            if reply == QMessageBox.Yes:
+                self.target_url_field.setFocus()
+        else:
+            # 点了 Start 按钮就变 Stop, Pause 按钮可以点击
+            if self.start_button.text() == 'Start':
+                self.start_button.setText('Stop')
+                self.pause_button.setEnabled(True)
+            elif self.start_button.text() == 'Stop':
+                # 点了 Stop 按钮就变 Start, Pause 按钮文字变成 Pause, Pause 状态变得不可点击
+                self.start_button.setText('Start')
+                self.pause_button.setText('Pause')
+                self.pause_button.setEnabled(False)
+
+            # 是否是变成了Stop, 如果是 Stop, 就开始扫描
+            if self.start_button.text() == 'Stop':
                 # 其他项的判断
                 if not brute_dict_path:
                     brute_dict_path = None
@@ -376,8 +375,8 @@ class MainWindow(QMainWindow):
 
                 # 初始化 HandleScan() 对象
                 self.handle_scan = HandleScan(url=target_url, header=HEADER, thread_number=threads_number,
-                                         brute_dict_path=brute_dict_path, is_brute_force_dirs=is_brute_force_dirs,
-                                         dir_start_with=dir_start_with, file_extension=file_extension)
+                                              brute_dict_path=brute_dict_path, is_brute_force_dirs=is_brute_force_dirs,
+                                              dir_start_with=dir_start_with, file_extension=file_extension)
 
                 # 检查正常 url 是否可用
                 result = self.handle_scan.examine_url(target_url)
@@ -387,23 +386,29 @@ class MainWindow(QMainWindow):
                                                  QMessageBox.Yes | QMessageBox.No)
                     if reply == QMessageBox.Yes:
                         reply_info = QMessageBox.information(self, 'Information', '重试中...', QMessageBox.Yes)
-                        self.start_button.setEnabled(True)
+                        self.pause_button.setEnabled(False)
+                        self.start_button.setText('Start')
                         if reply_info == QMessageBox.Yes:
                             self.start_button.click()
                     elif reply == QMessageBox.No:
+                        self.pause_button.setEnabled(False)
+                        self.start_button.setText('Start')
                         self.target_url_field.setFocus()
-                        self.start_button.setEnabled(True)
                 else:
+                    # 测试连接成功, 进入正题
                     # 开启独立发送请求线程, 接收回传数据, 开启独立线程的原因是避免阻塞主Window
                     self.handle_scan.start()
                     self.handle_scan.signal_qt.connect(self.handle_signal)
-        elif self.start_button.text() == 'Start':
-            # 停止扫描呗
-            self.handle_scan.stop_scan = True
+            elif self.start_button.text() == 'Start':
+                # 停止扫描呗
+                self.handle_scan.stop_scan = True
 
     def handle_signal(self, signal):
-        self.console_field.append(signal)
-        if signal == 'Done':
+        if signal == 'Start':
+            self.console_field.append('Starting scan...')
+
+        elif signal == 'Done':
+            self.console_field.append('Done')
             # 退出线程
             self.handle_scan.quit()
             self.start_button.setEnabled(True)
@@ -412,19 +417,20 @@ class MainWindow(QMainWindow):
             self.pause_button.setText('Pause')
             QMessageBox.information(self, 'Information', '扫描完成!', QMessageBox.Yes)
 
-        elif signal == 'Paused':
-            self.start_button.setEnabled(True)
-            QMessageBox.information(self, 'Information', '扫描暂停!', QMessageBox.Yes)
-
         elif signal == 'Stopped':
+            self.console_field.append('Stopped')
             self.handle_scan.quit()
             self.start_button.setEnabled(True)
             QMessageBox.information(self, 'Information', '扫描取消!', QMessageBox.Yes)
 
         elif signal == 'Error':
+            self.console_field.append('Error')
             self.handle_scan.quit()
             self.start_button.setEnabled(True)
             QMessageBox.information(self, 'Information', '扫描参数出错!', QMessageBox.Yes)
+
+        else:
+            self.console_field.append(signal)
 
 
 class ListInfoDialog(QWidget):
@@ -498,8 +504,6 @@ class HandleScan(QThread):
     """
     # 定义类属性
     signal_qt = pyqtSignal(str)
-    # 使用队列
-    self_queue = queue.Queue()
 
     def __init__(self, url, header, thread_number, brute_dict_path, is_brute_force_dirs,
                  dir_start_with, file_extension):
@@ -528,128 +532,151 @@ class HandleScan(QThread):
         self.threshold = 3
         self.pause_scan = False
         self.stop_scan = False
+        self.done_scan = False
         self.record_process = 0
+        self.end_payload_url = None
 
     def debug(self):
-        """display all of parameter"""
+        """return all of parameter get from class"""
         return "url -> {}, thread_number -> {}, brute_dict_path -> {}, is_brute_force_dicts -> {}, " \
                "dir_start_with -> {}, file_extension -> {}".format(self.url, self.header, self.thread_number,
                                                                    self.brute_dict_path, self.is_brute_force_dirs,
                                                                    self.dir_start_with, self.file_extension)
 
     def run(self):
-        # 获取所有添加好的 payload url, 不启用queue
-        if int(self.thread_number) == 1:
-            payload_url_list = self.get_payload_list(is_queue=False)
-        elif 1 < int(self.thread_number) <= 100:
-            payload_url_list = self.get_payload_list(is_queue=True)
-        else:
+        try:
+            # 获取所有添加好的 payload url 集合
+            payload_url_list = self.get_payload_list()
+            # 记录末尾不为空的字符串
+            payload_url_list.reverse()
+            for i in payload_url_list:
+                if i:
+                    self.end_payload_url = i
+                    break
+        except:
             payload_url_list = []
+        payload_url_list.reverse()
 
-        timeout = 10
-        # threshold: control request failed resend time interval
-        threshold = 3
-        # flow_threshold: time interval per request
-        flow_threshold = 0
+        def __send_request__(urls, is_multithread=False):
+            """
+            单纯的发送请求内部函数
+            """
+            # 暂时设定的控制参数
+            timeout = 10
+            # threshold: control request failed resend time interval
+            threshold = 3
+            # flow_threshold: time interval per request
+            flow_threshold = 0
 
-        # 监听循环
+            # send_request threshold 参数是控制重发次数 flow_threshold 是 每发一个的等待时间, 避免速度过快
+            if not is_multithread:
+                # 单线程
+                for payload_url in urls:
+                    if not self.pause_scan and not self.stop_scan:
+                        # 如果 pause_scan 为False 和 stop_scan 为False
+                        while threshold > 0:
+                            try:
+                                response = requests.get(payload_url, headers=self.header, proxies=None, cookies=None, timeout=timeout)
+                                # 返回给前端, 每命中一个发送一个信号
+                                if not str(response.status_code).startswith('4'):
+                                    self.signal_qt.emit("[<span style='color: green'>{}</span>]{}".format(response.status_code, payload_url))
+
+                                self.sleep(flow_threshold)
+
+                                if payload_url == self.end_payload_url:
+                                    self.done_scan = True
+                                break
+                            except requests.ConnectionError:
+                                threshold -= 1
+                                continue
+                            except requests.ConnectTimeout:
+                                threshold -= 1
+                                continue
+                            except:
+                                threshold -= 1
+                                continue
+
+                    elif self.pause_scan and not self.stop_scan:
+                        # 如果 pause_scan 为True 和 stop_scan 为False
+                        self.record_process = payload_url_list.index(payload_url)
+                        break
+
+                    elif self.stop_scan:
+                        # 单纯的停止扫描
+                        break
+
+            else:
+                # 多线程
+                payload_url = urls
+
+                if not self.pause_scan and not self.stop_scan:
+                    while threshold > 0:
+                        try:
+                            response = requests.get(payload_url, headers=self.header, proxies=None, cookies=None,
+                                                    timeout=timeout)
+                            # 返回给前端, 每命中一个发送一个信号
+                            if not str(response.status_code).startswith('4'):
+                                self.signal_qt.emit(
+                                    "[<span style='color: green'>{}</span>]{}".format(response.status_code, payload_url))
+
+                            self.sleep(flow_threshold)
+                            break
+                        except requests.ConnectionError:
+                            threshold -= 1
+                            continue
+                        except requests.ConnectTimeout:
+                            threshold -= 1
+                            continue
+                        except:
+                            threshold -= 1
+                            continue
+
+                elif self.pause_scan and not self.stop_scan:
+                    # 如果 pause_scan 为True 和 stop_scan 为False, 就直接卡死在这
+                    while True:
+                        self.sleep(2)
+                        if not self.pause_scan or self.stop_scan:
+                            # 如果 pause_scan 为 False 或者 stop_scan 为true, 就跳出循环
+                            break
+
+        # 监听循环, 请求控制器
         while True:
             if self.stop_scan:
                 print('老子按了stop')
                 self.signal_qt.emit('Stopped')
                 break
+            elif self.done_scan:
+                print('扫描完成了')
+                self.signal_qt.emit('Done')
+                break
 
             # 发送请求
-            # send_request threshold 参数是控制重发次数 flow_threshold 是 每发一个的等待时间, 避免速度过快
             if int(self.thread_number) == 1:
-                # 如果有记录点, 就从这恢复
+                # 如果程序有记录点, 就从这恢复
                 if self.record_process != 0:
                     if not self.pause_scan:
                         payload_url_list = payload_url_list[self.record_process:]
-                        # 做完事情之后就重置 self.record_process
-                        # self.record_process = 0
-
-                        for url in payload_url_list:
-                            if not self.pause_scan and not self.stop_scan:
-                                # 如果 pause_scan 为False 和 stop_scan 为False
-                                while threshold > 0:
-                                    try:
-                                        response = requests.get(url, headers=self.header, proxies=None, cookies=None, timeout=timeout)
-                                        # 返回给前端, 每命中一个发送一个信号
-                                        if response.status_code != 404:
-                                            self.signal_qt.emit("[<span style='color: green'>{}</span>]{}".format(response.status_code, url))
-
-                                        # 暂时放着, 看看是不是 QThread 的 sleep 方法
-                                        self.sleep(flow_threshold)
-                                        break
-                                    except requests.ConnectionError:
-                                        threshold -= 1
-                                        continue
-                                    except requests.ConnectTimeout:
-                                        threshold -= 1
-                                        continue
-                                    except:
-                                        threshold -= 1
-                                        continue
-
-                            elif self.pause_scan and not self.stop_scan:
-                                # 如果 pause_scan 为True 和 stop_scan 为False
-                                self.record_process = payload_url_list.index(url)
-                                break
-
-                            elif self.stop_scan:
-                                # 单纯的停止扫描
-                                break
+                        # 扫描
+                        __send_request__(urls=payload_url_list, is_multithread=False)
                     else:
-                        # 如果有记录点, 但是 self.pause 为False 就不执行任何操作
                         time.sleep(2)
-                        print("老子在这等待 重新扫描嘞")
                         continue
 
                 else:
                     # 没有任何记录点
-                    for url in payload_url_list:
-                        if not self.pause_scan and not self.stop_scan:
-                            # 如果 pause_scan 为False 和 stop_scan 为False
-                            while threshold > 0:
-                                try:
-                                    response = requests.get(url, headers=self.header, proxies=None, cookies=None, timeout=timeout)
-                                    # 返回给前端, 每命中一个发送一个信号
-                                    if response.status_code != 404:
-                                        self.signal_qt.emit("[<span style='color: green'>{}</span>]{}".format(response.status_code, url))
-
-                                    # 暂时放着, 看看是不是 QThread 的 sleep 方法
-                                    self.sleep(flow_threshold)
-                                    break
-                                except requests.ConnectionError:
-                                    threshold -= 1
-                                    continue
-                                except requests.ConnectTimeout:
-                                    threshold -= 1
-                                    continue
-                                except:
-                                    threshold -= 1
-                                    continue
-
-                        elif self.pause_scan and not self.stop_scan:
-                            # 如果 pause_scan 为True 和 stop_scan 为False
-                            self.record_process = payload_url_list.index(url)
-                            break
-
-                        elif self.stop_scan:
-                            # 单纯的停止扫描
-                            break
+                    # 扫描
+                    self.signal_qt.emit('Start')
+                    __send_request__(urls=payload_url_list, is_multithread=False)
 
                     if not self.pause_scan and not self.stop_scan:
-                        # 如果 pause_scan 和 stop_scan 都为 False
+                        # 一连串下来也没有 暂停, 停止 操作
                         self.signal_qt.emit("Done")
                         # 退出整个的监听循环
                         break
 
                     elif self.pause_scan and not self.stop_scan:
                         # 如果 pause_scan 为True 和 stop_scan 为 False
-                        print('点了暂停的记录点', self.record_process)
-                        self.signal_qt.emit("Paused")
+                        continue
 
                     elif self.stop_scan:
                         # 如果 stop _scan 为 True
@@ -664,14 +691,24 @@ class HandleScan(QThread):
                         break
 
             elif 1 < int(self.thread_number) <= 100:
-                for i in range(int(self.thread_number)):
-                    # 控制发送速率
-                    self.sleep(flow_threshold)
-                    t = Thread(target=self.multi_request, args=(timeout, threshold))
-                    t.start()
+                try:
+                    from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
+                except Exception as e:
+                    raise(str(e))
 
-                while True:
-                    self.self_queue.join()
+                self.signal_qt.emit('Start')
+                executor = ThreadPoolExecutor(max_workers=int(self.thread_number))
+                all_task = [executor.submit(__send_request__, url, True) for url in payload_url_list]
+
+                if self.stop_scan:
+                    # 按了stop
+                    # 等待池子里面的任务完成之后就全部杀死线程池, 便不会有新任务加进去
+                    executor.shutdown()
+                    self.signal_qt.emit('Done')
+                    break
+                else:
+                    # 等待所有线程池的任务完成
+                    wait(all_task, return_when=ALL_COMPLETED)
                     self.signal_qt.emit("Done")
                     break
             else:
@@ -680,17 +717,11 @@ class HandleScan(QThread):
                 # 退出整个的监听循环
                 break
 
-            if self.pause_scan:
-                # 如果 self.pause_scan 为 true, 就休息2秒, 继续循环等待
-                time.sleep(2)
-                continue
-
-    def get_payload_list(self, is_queue=False):
+    def get_payload_list(self):
         """
         get_payload_list function aim that handle payload dictionary increase to current url and return the new payload
         url list
 
-        :param is_queue: do you use queue?
         :return: all of urls of added payload
         """
         # 所有字典中包含的 "路径"/"文件" 放入 all_dir_path_list
@@ -705,55 +736,16 @@ class HandleScan(QThread):
             # 跳过 空行、#开头的、空格开头的 行
             # 解码为 str
             line = line.decode('utf8').strip()
-            if line.startswith('#') or line.startswith(' '):
+            if line.startswith('#') or line.startswith(' ') or not line:
                 continue
 
             # 拼接
             payload_url = self.url + line
 
-            if payload_url.strip() != self.url.strip() or payload_url.strip() != (self.url.strip()+'/'):
-                if is_queue:
-                    self.self_queue.put(payload_url)
-                else:
-                    payload_url_list.append(payload_url)
+            if payload_url.strip() != self.url.strip() or payload_url.strip() != (self.url.strip() + '/'):
+                payload_url_list.append(payload_url)
 
         return payload_url_list
-
-    def multi_request(self, timeout=10, threshold=3):
-        """
-        处理多线程请求任务
-
-        :param timeout:
-        :param threshold: 控制失败重发次数
-        :return: None
-        """
-        while True:
-            while threshold > 0:
-                try:
-                    # url 为从队列中获取
-                    url = self.self_queue.get()
-                    response = requests.get(url, headers=self.header, proxies=None, cookies=None, timeout=timeout)
-
-                    # 返回给前端, 每命中一个发送一个信号
-                    if response.status_code != 404:
-                        self.signal_qt.emit("[<span style='color: green'>{}</span>]{}".format(response.status_code, url))
-                    # 发一个 task_done() 一个
-                    self.self_queue.task_done()
-
-                    break
-                except requests.ConnectionError:
-                    threshold -= 1
-                    continue
-                except requests.ConnectTimeout:
-                    threshold -= 1
-                    continue
-                except:
-                    threshold -= 1
-                    continue
-
-            # 队列为空, 全部发送完, 扫描完成
-            if self.self_queue.empty():
-                break
 
     @staticmethod
     def normalization_url(url):
